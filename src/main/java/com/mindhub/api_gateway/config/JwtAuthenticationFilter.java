@@ -8,7 +8,6 @@ import org.springframework.cloud.gateway.filter.GatewayFilter;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
 import org.springframework.http.HttpStatus;
 
-
 import org.springframework.security.core.GrantedAuthority;
 
 import org.springframework.stereotype.Component;
@@ -16,48 +15,63 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
-
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
-
+import java.util.Optional;
 
 @Component
 public class JwtAuthenticationFilter implements GatewayFilter {
 
-    @Autowired
     private final JwtUtils jwtUtils;
 
+    @Autowired
     public JwtAuthenticationFilter(JwtUtils jwtUtils){
         this.jwtUtils = jwtUtils;
     }
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
-        String token = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-        if(!exchange.getRequest().getPath().toString().startsWith("/api/auth")){
-            if (token != null && token.startsWith("Bearer ")) {
-                token = token.substring(7);
-                Date string = jwtUtils.parseClaims(token).getExpiration();
-                try {
-                    if (!jwtUtils.isTokenExpired(token)) {
-                        Claims claims = jwtUtils.parseClaims(token);
-//                        exchange.getRequest().mutate().header("username", claims.getSubject()).build();
-                    } else {
-                        return onError(exchange, "Invalid JWT Token", HttpStatus.UNAUTHORIZED);
-                    }
-                } catch (Exception e) {
-                    return onError(exchange, "JWT Token validation failed", HttpStatus.UNAUTHORIZED);
-                }
-            } else {
-                return onError(exchange, "Authorization header is missing or invalid", HttpStatus.UNAUTHORIZED);
-            }
+        String path = exchange.getRequest().getPath().toString();
+        if (!path.startsWith("/api/auth")) {
+            return extractToken(exchange)
+                    .filter(this::isValidToken)
+                    .map(token -> processToken(exchange, token))
+                    .orElseGet(() -> onError(exchange,
+                            "Authorization header is missing or invalid",
+                            HttpStatus.UNAUTHORIZED));
         }
         return chain.filter(exchange);
     }
 
-    private Mono<Void> onError(ServerWebExchange exchange, String err, HttpStatus httpStatus) {
-        exchange.getResponse().setStatusCode(httpStatus);
+    private Optional<String> extractToken(ServerWebExchange exchange) {
+        String token = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+        return Optional.ofNullable(token).filter(t -> t.startsWith("Bearer "));
+    }
+
+    private boolean isValidToken(String token) {
+        try {
+            String jwtToken = token.substring(7);
+            if (jwtUtils.isTokenExpired(jwtToken)) {
+                return true;
+            }
+        } catch (Exception e) {
+            return false;
+        }
+        return false;
+    }
+
+    private Mono<Void> processToken(ServerWebExchange exchange, String token) {
+        try {
+            Claims claims = jwtUtils.parseClaims(token);
+            return Mono.empty();
+        } catch (Exception e) {
+            return onError(exchange, "JWT Token validation failed", HttpStatus.UNAUTHORIZED);
+        }
+    }
+
+    private Mono<Void> onError(ServerWebExchange exchange, String error, HttpStatus status) {
+        exchange.getResponse().setStatusCode(status);
         return exchange.getResponse().setComplete();
     }
 
@@ -65,4 +79,3 @@ public class JwtAuthenticationFilter implements GatewayFilter {
         return new ArrayList<>();
     }
 }
-
